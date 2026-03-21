@@ -403,8 +403,11 @@ optimizer = model.setup_optimizer(
 # torch.compile for ROCm — uses AMD Triton backend for kernel fusion
 # "default" mode is used instead of "reduce-overhead" because CUDA graph capture
 # (used by reduce-overhead) has limited support on ROCm/HIP
-print("Compiling model with torch.compile (default mode)...")
-model = torch.compile(model, mode="default")
+if os.environ.get("AUTORESEARCH_NO_COMPILE", "") == "1":
+    print("torch.compile DISABLED (AUTORESEARCH_NO_COMPILE=1)")
+else:
+    print("Compiling model with torch.compile (default mode)...")
+    model = torch.compile(model, mode="default")
 
 train_loader = make_dataloader(tokenizer, DEVICE_BATCH_SIZE, MAX_SEQ_LEN, "train", backend="cuda")
 x, y, epoch = next(train_loader)  # prefetch first batch
