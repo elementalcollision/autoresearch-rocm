@@ -176,6 +176,7 @@ def main():
     parser.add_argument("--max", type=int, default=80, help="Max experiments")
     parser.add_argument("--training-script", default="train_rocm.py", help="Training script path")
     parser.add_argument("--results", default="results.tsv", help="Results TSV path")
+    parser.add_argument("--dataset", type=str, default="", help="Dataset name (for heartbeat/logging)")
     args = parser.parse_args()
 
     success = run_headless(
@@ -183,6 +184,7 @@ def main():
         results_path=args.results,
         tag=args.tag,
         max_experiments=args.max,
+        dataset_name=args.dataset,
     )
     sys.exit(0 if success else 1)
 
