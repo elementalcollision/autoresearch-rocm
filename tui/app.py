@@ -1,4 +1,4 @@
-"""Main Textual Application for the autoresearch dashboard."""
+"""Main Textual Application for the autoresearch dashboard (AMD ROCm / MI300x)."""
 
 import os
 import subprocess
@@ -40,10 +40,10 @@ def _get_process_rss_mb(pid: int) -> float:
 
 
 class DashboardApp(App):
-    """Autoresearch training dashboard for Apple Silicon."""
+    """Autoresearch training dashboard for AMD ROCm GPUs."""
 
     TITLE = "autoresearch"
-    SUB_TITLE = "Apple Silicon Training Dashboard"
+    SUB_TITLE = "ROCm Training Dashboard"
     CSS_PATH = "styles.tcss"
 
     BINDINGS = [
@@ -54,7 +54,7 @@ class DashboardApp(App):
 
     def __init__(
         self,
-        training_script: str = "train_cuda.py",
+        training_script: str = "train_rocm.py",
         mode: str = "single",
         max_experiments: int = 100,
         run_tag: str | None = None,

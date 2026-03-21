@@ -28,7 +28,7 @@ from tui.results import (
 )
 
 
-# Marker comments that delimit the hyperparameter block in train_cuda.py
+# Marker comments that delimit the hyperparameter block in train_rocm.py
 HP_BLOCK_START = "# ---------------------------------------------------------------------------\n# Hyperparameters"
 HP_BLOCK_END = "# ---------------------------------------------------------------------------\n# Setup"
 
@@ -413,7 +413,7 @@ class ExperimentOrchestrator:
 
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
-        env["AUTORESEARCH_ORCHESTRATOR"] = "1"  # suppress standalone results writing in train_cuda.py
+        env["AUTORESEARCH_ORCHESTRATOR"] = "1"  # suppress standalone results writing in train_rocm.py
 
         try:
             with self._lock:
@@ -482,7 +482,7 @@ class ExperimentOrchestrator:
     # ------------------------------------------------------------------
 
     def _extract_hp_block(self) -> str:
-        """Extract the hyperparameter block from train_cuda.py."""
+        """Extract the hyperparameter block from train_rocm.py."""
         with open(self._training_script) as f:
             content = f.read()
 
@@ -495,7 +495,7 @@ class ExperimentOrchestrator:
         return content[start_idx:end_idx]
 
     def _apply_hp_block(self, new_block: str) -> None:
-        """Replace the hyperparameter block in train_cuda.py."""
+        """Replace the hyperparameter block in train_rocm.py."""
         with open(self._training_script) as f:
             content = f.read()
 
