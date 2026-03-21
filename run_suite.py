@@ -388,6 +388,9 @@ def run_agent(dataset_name, tag, max_experiments=80):
     Uses the headless orchestrator (no TUI) so the run survives terminal
     disconnects, SSH timeouts, and overnight unattended operation.
     The TUI dashboard (dashboard.py --agent) is for interactive use only.
+
+    Resume-aware: if experiments already exist, the orchestrator will
+    pick up from where it left off (reads results.tsv on startup).
     """
     from tui.headless import run_headless
 
@@ -395,11 +398,14 @@ def run_agent(dataset_name, tag, max_experiments=80):
     results_tsv = str(results_dir / "results.tsv")
     run_tag = f"{tag}-{dataset_name}"
 
+    existing = count_experiments(dataset_name)
     print(f"\n{'='*60}")
     print(f"  Running agent (headless): {dataset_name}")
     print(f"  Tag: {run_tag}")
     print(f"  Max experiments: {max_experiments}")
     print(f"  Results: {results_tsv}")
+    if existing > 0:
+        print(f"  Resuming: {existing} experiments already completed")
     print(f"{'='*60}\n")
 
     try:
@@ -408,6 +414,7 @@ def run_agent(dataset_name, tag, max_experiments=80):
             results_path=results_tsv,
             tag=run_tag,
             max_experiments=max_experiments,
+            dataset_name=dataset_name,
         )
     except KeyboardInterrupt:
         print(f"\n  Agent interrupted by user")
@@ -563,11 +570,15 @@ def main():
         print(f"  [{i+1}/{len(datasets)}] Dataset: {dataset_name}")
         print(f"{'#'*60}")
 
-        # Skip if completed
+        # Skip if completed (resume-aware: only skip when target reached)
         if args.skip_completed and has_results(dataset_name):
             n = count_experiments(dataset_name)
-            print(f"  Skipping — already has {n} experiments")
-            continue
+            if n >= args.max_experiments:
+                print(f"  Skipping — already has {n}/{args.max_experiments} experiments")
+                continue
+            else:
+                print(f"  Resuming — has {n}/{args.max_experiments} experiments")
+                # Fall through to prepare + run (orchestrator will resume)
 
         # Prepare data
         print(f"\n  Preparing {dataset_name}...")

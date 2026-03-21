@@ -20,3 +20,6 @@ dev/
 
 # Results file (root only — results/<dataset>/results.tsv is tracked)
 /results.tsv
+
+# Heartbeat status file (written by resilience system for external monitors)
+.runner_status.json
