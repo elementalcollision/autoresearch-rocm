@@ -12,6 +12,8 @@ _BACKEND = os.environ.get("AUTORESEARCH_BACKEND", "auto").lower()
 if _BACKEND == "auto":
     from backends import detect_backend
     _BACKEND = detect_backend()
+if _BACKEND == "rocm7":
+    os.execv(sys.executable, [sys.executable, os.path.join(os.path.dirname(__file__), "train_rocm7.py")] + sys.argv[1:])
 if _BACKEND == "rocm":
     os.execv(sys.executable, [sys.executable, os.path.join(os.path.dirname(__file__), "train_rocm.py")] + sys.argv[1:])
 if _BACKEND == "cuda":

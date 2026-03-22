@@ -9,6 +9,20 @@ import subprocess
 import re
 
 
+def get_rocm_version():
+    """Return (major, minor) ROCm version tuple, or None if not ROCm."""
+    try:
+        import torch
+        hip_version = getattr(torch.version, 'hip', None)
+        if hip_version:
+            # hip_version is like "6.3.42134" — extract major.minor
+            parts = hip_version.split('.')
+            return (int(parts[0]), int(parts[1]))
+    except (ImportError, ValueError, IndexError):
+        pass
+    return None
+
+
 def detect_backend():
     """
     Auto-detect best available backend.
@@ -16,8 +30,18 @@ def detect_backend():
     Override with AUTORESEARCH_BACKEND env var: 'rocm', 'cuda', 'mlx', 'mps', or 'auto'.
     """
     override = os.environ.get("AUTORESEARCH_BACKEND", "auto").lower()
-    if override not in ("auto", "rocm", "cuda", "mlx", "mps"):
-        raise ValueError(f"AUTORESEARCH_BACKEND must be 'auto', 'rocm', 'cuda', 'mlx', or 'mps', got '{override}'")
+    if override not in ("auto", "rocm", "rocm7", "cuda", "mlx", "mps"):
+        raise ValueError(f"AUTORESEARCH_BACKEND must be 'auto', 'rocm', 'rocm7', 'cuda', 'mlx', or 'mps', got '{override}'")
+
+    if override == "rocm7":
+        try:
+            import torch
+            if torch.cuda.is_available():
+                return "rocm7"
+            raise RuntimeError("PyTorch is installed but ROCm/HIP is not available")
+        except ImportError:
+            raise RuntimeError("AUTORESEARCH_BACKEND=rocm7 but torch is not installed. "
+                               "Install with: uv pip install 'autoresearch-rocm[rocm]'")
 
     if override == "rocm":
         try:
@@ -104,6 +128,7 @@ def get_hardware_info():
         "chip_name": "unknown",
         "chip_tier": "unknown",
         "gpu_cores": 0,
+        "rocm_version": get_rocm_version(),
     }
 
     # Try GPU first (works for both NVIDIA CUDA and AMD ROCm via HIP)
@@ -119,7 +144,7 @@ def get_hardware_info():
             name_lower = props.name.lower()
 
             # AMD Instinct / Radeon Pro / Radeon RX
-            if any(x in name_lower for x in ["mi300", "mi250", "mi210", "mi100"]):
+            if any(x in name_lower for x in ["mi350", "mi325", "mi308", "mi300", "mi250", "mi210", "mi100"]):
                 info["chip_tier"] = "datacenter"
             elif any(x in name_lower for x in ["w7900", "w7800", "pro w"]):
                 info["chip_tier"] = "professional"
@@ -217,7 +242,11 @@ def get_peak_flops(hw_info=None):
             return flops
 
     # AMD GPU FLOPS lookup (bf16 dense, matrix cores)
+    # Order matters — longer/more specific matches first
     amd_flops = {
+        "mi350x": 2300e12,     # MI350X: ~2300 TFLOPS bf16 (estimated, CDNA 4)
+        "mi325x": 2615e12,     # MI325X: 2615 TFLOPS bf16 matrix
+        "mi308x": 1524e12,     # MI308X: 1524 TFLOPS bf16 matrix
         "mi300x": 1307e12,     # MI300x: 1307 TFLOPS bf16 matrix
         "mi300a": 980e12,      # MI300A (APU): ~980 TFLOPS bf16
         "mi250x": 383e12,      # MI250X: 383 TFLOPS bf16

@@ -11,10 +11,11 @@ To set up a new experiment, work with the user to:
 3. **Read the in-scope files**: The repo is small. Read these files for full context:
    - `README.md` — repository context.
    - `prepare.py` — fixed constants, data prep, tokenizer, dataloader, evaluation. Do not modify.
-   - `train_rocm.py` — ROCm backend training script. Modify this for experiments.
+   - `train_rocm.py` — ROCm 6.x training script (production, frozen during data collection). Modify this for experiments.
+   - `train_rocm7.py` — ROCm 7.x training script (reduce-overhead compile, CK FA backend). Use with `AUTORESEARCH_BACKEND=rocm7`.
    - `backends/` — hardware detection, optimizers. Do not modify.
 4. **Verify data exists**: Check that `~/.cache/autoresearch/` contains data shards and a tokenizer. If not, tell the human to run `uv run prepare.py`.
-5. **Select backend**: Set `AUTORESEARCH_BACKEND=rocm` or let auto-detect find the AMD GPU.
+5. **Select backend**: Set `AUTORESEARCH_BACKEND=rocm` (6.x) or `AUTORESEARCH_BACKEND=rocm7` (7.x), or let auto-detect find the AMD GPU (defaults to 6.x).
 6. **Initialize results.tsv**: Create `results.tsv` with just the header row. The baseline will be recorded after the first run.
 7. **Confirm and go**: Confirm setup looks good.
 
@@ -37,11 +38,15 @@ This fork runs on AMD Instinct GPUs via ROCm. Key optimizations:
 # Auto-detect (default: detects AMD GPU via HIP)
 uv run train.py
 
-# Force ROCm backend
+# Force ROCm 6.x backend
 AUTORESEARCH_BACKEND=rocm uv run train.py
 
-# Run ROCm script directly
-uv run train_rocm.py
+# Force ROCm 7.x backend
+AUTORESEARCH_BACKEND=rocm7 uv run train.py
+
+# Run ROCm scripts directly
+uv run train_rocm.py   # 6.x
+uv run train_rocm7.py  # 7.x
 ```
 
 ### Installing dependencies

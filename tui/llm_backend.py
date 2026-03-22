@@ -21,8 +21,31 @@ class ExperimentProposal:
 # Prompt templates
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """\
-You are an autonomous AI researcher optimizing a small language model on AMD MI300x GPUs with ROCm.
+def get_system_prompt(hw_info=None):
+    """Generate system prompt tailored to the detected hardware and ROCm version."""
+    if hw_info is None:
+        from backends import get_hardware_info
+        hw_info = get_hardware_info()
+
+    rocm_ver = hw_info.get("rocm_version")
+    gpu_name = hw_info.get("chip_name", "AMD GPU")
+    mem_gb = hw_info.get("memory_gb", 192)
+
+    if rocm_ver and rocm_ver[0] >= 7:
+        rocm_str = f"ROCm {rocm_ver[0]}.{rocm_ver[1]}"
+        rocm_notes = (
+            "torch.compile (reduce-overhead mode) uses HIP graph capture, "
+            "CK Flash Attention is explicitly selected, bf16 autocast is on."
+        )
+    else:
+        rocm_str = f"ROCm {rocm_ver[0]}.{rocm_ver[1]}" if rocm_ver else "ROCm"
+        rocm_notes = (
+            "torch.compile (default mode) fuses kernels via AMD Triton, "
+            "SDPA dispatches to CK-based attention, bf16 autocast is on."
+        )
+
+    return f"""\
+You are an autonomous AI researcher optimizing a small language model on {gpu_name} GPUs with {rocm_str}.
 
 You modify the hyperparameter block of a training script to minimize val_bpb (validation bits per byte — lower is better). Each experiment runs for a fixed 5-minute time budget.
 
@@ -34,7 +57,7 @@ Rules:
 - Consider the full results history — don't repeat failed experiments.
 - If many experiments have been discarded, try a different direction entirely.
 - The key insight from prior characterization: maximizing gradient steps within the fixed time budget is the dominant factor. Smaller batches = more steps = usually better, up to a point.
-- ROCm-specific: torch.compile (default mode) fuses kernels via AMD Triton, SDPA dispatches to CK-based attention, bf16 autocast is on. HBM3 (192GB) is generous — the time budget is the dominant constraint, not memory.
+- ROCm-specific: {rocm_notes} HBM ({mem_gb:.0f}GB) is generous — the time budget is the dominant constraint, not memory.
 
 Respond in EXACTLY this format (no markdown fences around the whole response):
 
@@ -43,6 +66,9 @@ REASONING: <2-3 sentences explaining why this change might improve val_bpb>
 CODE:
 <the complete replacement hyperparameter block, from the opening marker comment to the closing marker comment, inclusive>
 """
+
+
+SYSTEM_PROMPT = get_system_prompt()
 
 USER_PROMPT_TEMPLATE = """\
 Here is the current hyperparameter block of the training script:
