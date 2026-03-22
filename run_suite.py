@@ -49,6 +49,11 @@ TOKENIZER_DIR = CACHE_DIR / "tokenizer"
 RESULTS_DIR = PROJECT_ROOT / "results"
 PROFILES_DIR = CACHE_DIR / "profiles"
 
+# Default LLM model — results from this model go in results/<dataset>/
+# Non-default models go in results/<model-slug>/<dataset>/
+# Current default: Sonnet 4; next iteration: Sonnet 4.6 (claude-sonnet-4-6)
+DEFAULT_MODEL = "claude-sonnet-4-20250514"
+
 # Dataset run order (priority order from plan)
 DATASET_ORDER = [
     "climbmix",
@@ -352,19 +357,67 @@ def prepare_alternative(dataset_name, num_shards=10, num_source=3):
 
 
 # ---------------------------------------------------------------------------
+# Model isolation
+# ---------------------------------------------------------------------------
+
+def _model_slug(model: str | None) -> str | None:
+    """Convert a model ID to a directory-safe slug.
+
+    Returns None for the default model (results go in results/<dataset>/).
+    Non-default models get results/<slug>/<dataset>/.
+
+    Examples:
+        "claude-sonnet-4-20250514"  → None  (default)
+        "claude-opus-4-6"           → "opus-4-6"
+        "claude-haiku-4-5-20251001" → "haiku-4-5-20251001"
+    """
+    if model is None or model == DEFAULT_MODEL:
+        return None
+    # Strip "claude-" prefix for shorter directory names
+    slug = model.removeprefix("claude-")
+    # Sanitize for filesystem safety
+    slug = slug.replace("/", "-").replace("\\", "-").strip("-")
+    return slug or None
+
+
+def _best_val_bpb_from_tsv(tsv_path: Path) -> str:
+    """Read best val_bpb from a results.tsv file. Returns formatted string or '—'."""
+    if not tsv_path.exists():
+        return "—"
+    with open(tsv_path) as f:
+        vals = []
+        for line in f:
+            parts = line.strip().split("\t")
+            if len(parts) >= 8 and parts[7] in ("keep", "baseline"):
+                try:
+                    vals.append(float(parts[2]))
+                except ValueError:
+                    pass
+    return f"{min(vals):.6f}" if vals else "—"
+
+
+# ---------------------------------------------------------------------------
 # Experiment execution
 # ---------------------------------------------------------------------------
 
-def get_results_dir(dataset_name):
-    """Get the results directory for a dataset."""
-    d = RESULTS_DIR / dataset_name
+def get_results_dir(dataset_name, model=None):
+    """Get the results directory for a dataset.
+
+    Default model:     results/<dataset>/
+    Non-default model: results/<model-slug>/<dataset>/
+    """
+    slug = _model_slug(model)
+    if slug:
+        d = RESULTS_DIR / slug / dataset_name
+    else:
+        d = RESULTS_DIR / dataset_name
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-def has_results(dataset_name):
+def has_results(dataset_name, model=None):
     """Check if a dataset already has experiment results."""
-    tsv = RESULTS_DIR / dataset_name / "results.tsv"
+    tsv = get_results_dir(dataset_name, model) / "results.tsv"
     if not tsv.exists():
         return False
     # Count non-header lines
@@ -373,16 +426,52 @@ def has_results(dataset_name):
     return len(lines) > 0
 
 
-def count_experiments(dataset_name):
+def count_experiments(dataset_name, model=None):
     """Count completed experiments for a dataset."""
-    tsv = RESULTS_DIR / dataset_name / "results.tsv"
+    tsv = get_results_dir(dataset_name, model) / "results.tsv"
     if not tsv.exists():
         return 0
     with open(tsv) as f:
         return sum(1 for l in f if l.strip() and not l.startswith("exp\t"))
 
 
-def run_agent(dataset_name, tag, max_experiments=80):
+def _write_deployment_manifest(results_dir, tag):
+    """Write a deployment manifest recording which GPU produced these results.
+
+    Creates manifest.json with hardware fingerprint and provenance metadata.
+    This enables validation that results came from the expected GPU and prevents
+    cross-deployment contamination when code is cloned to a different instance.
+    """
+    try:
+        from backends import get_hardware_info, get_peak_flops, get_rocm_version
+
+        hw = get_hardware_info()
+        rocm_ver = get_rocm_version()
+
+        manifest = {
+            "gpu_name": hw.get("chip_name", "unknown"),
+            "gpu_vram_gb": round(hw.get("memory_gb", 0), 1),
+            "gpu_cores_cus": hw.get("gpu_cores", 0),
+            "chip_tier": hw.get("chip_tier", "unknown"),
+            "rocm_version": f"{rocm_ver[0]}.{rocm_ver[1]}" if rocm_ver else "unknown",
+            "peak_bf16_tflops": round(get_peak_flops(hw) / 1e12, 1),
+            "tag": tag,
+            "timestamp": datetime.now().isoformat(),
+            "results_dir": str(results_dir),
+        }
+
+        manifest_path = Path(results_dir) / "manifest.json"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, indent=2)
+            f.write("\n")
+        print(f"  Deployment manifest: {manifest_path}")
+        print(f"  GPU: {manifest['gpu_name']} ({manifest['gpu_vram_gb']} GB, ROCm {manifest['rocm_version']})")
+    except Exception as e:
+        print(f"  Warning: could not write deployment manifest: {e}")
+
+
+def run_agent(dataset_name, tag, max_experiments=80, model=None):
     """Run the autonomous agent for a dataset.
 
     Uses the headless orchestrator (no TUI) so the run survives terminal
@@ -394,13 +483,16 @@ def run_agent(dataset_name, tag, max_experiments=80):
     """
     from tui.headless import run_headless
 
-    results_dir = get_results_dir(dataset_name)
+    results_dir = get_results_dir(dataset_name, model)
     results_tsv = str(results_dir / "results.tsv")
     run_tag = f"{tag}-{dataset_name}"
 
-    existing = count_experiments(dataset_name)
+    slug = _model_slug(model)
+    existing = count_experiments(dataset_name, model)
     print(f"\n{'='*60}")
     print(f"  Running agent (headless): {dataset_name}")
+    if slug:
+        print(f"  Model: {model} (slug: {slug})")
     print(f"  Tag: {run_tag}")
     print(f"  Max experiments: {max_experiments}")
     print(f"  Results: {results_tsv}")
@@ -408,12 +500,19 @@ def run_agent(dataset_name, tag, max_experiments=80):
         print(f"  Resuming: {existing} experiments already completed")
     print(f"{'='*60}\n")
 
+    # Write deployment manifest for hardware provenance
+    _write_deployment_manifest(results_dir, run_tag)
+
+    backend = os.environ.get("AUTORESEARCH_BACKEND", "rocm")
+    script = "train_rocm7.py" if backend == "rocm7" else "train_rocm.py"
+
     try:
         return run_headless(
-            training_script="train_rocm.py",
+            training_script=script,
             results_path=results_tsv,
             tag=run_tag,
             max_experiments=max_experiments,
+            model=model,
             dataset_name=dataset_name,
         )
     except KeyboardInterrupt:
@@ -426,34 +525,34 @@ def run_agent(dataset_name, tag, max_experiments=80):
 # ---------------------------------------------------------------------------
 
 def print_status():
-    """Print status of all datasets."""
+    """Print status of all datasets, including model-specific results."""
     print("\n  Multi-Dataset Experiment Status")
-    print("  " + "=" * 58)
-    print(f"  {'Dataset':<20} {'Profile':<10} {'Experiments':<12} {'Best val_bpb':<14}")
-    print("  " + "-" * 58)
+    print("  " + "=" * 70)
+    print(f"  {'Dataset':<20} {'Model':<18} {'Profile':<10} {'Exps':<8} {'Best val_bpb':<14}")
+    print("  " + "-" * 70)
 
     for name in DATASET_ORDER:
         has_profile = "yes" if profile_exists(name) else "no"
-        n_exp = count_experiments(name)
 
-        best = "—"
+        # Default model results (results/<dataset>/)
         tsv = RESULTS_DIR / name / "results.tsv"
-        if tsv.exists():
-            with open(tsv) as f:
-                vals = []
-                for line in f:
-                    parts = line.strip().split("\t")
-                    if len(parts) >= 8 and parts[7] in ("keep", "baseline"):
-                        try:
-                            vals.append(float(parts[2]))
-                        except ValueError:
-                            pass
-                if vals:
-                    best = f"{min(vals):.6f}"
+        n_exp = count_experiments(name)
+        best = _best_val_bpb_from_tsv(tsv)
+        print(f"  {name:<20} {'(default)':<18} {has_profile:<10} {n_exp:<8} {best:<14}")
 
-        print(f"  {name:<20} {has_profile:<10} {n_exp:<12} {best:<14}")
+        # Scan for model-specific results (results/<model-slug>/<dataset>/)
+        if RESULTS_DIR.exists():
+            for subdir in sorted(RESULTS_DIR.iterdir()):
+                if subdir.is_dir() and subdir.name not in DATASET_ORDER:
+                    model_tsv = subdir / name / "results.tsv"
+                    if model_tsv.exists():
+                        m_count = 0
+                        with open(model_tsv) as f:
+                            m_count = sum(1 for l in f if l.strip() and not l.startswith("exp\t"))
+                        m_best = _best_val_bpb_from_tsv(model_tsv)
+                        print(f"  {'':<20} {subdir.name:<18} {'':<10} {m_count:<8} {m_best:<14}")
 
-    print("  " + "=" * 58)
+    print("  " + "=" * 70)
 
     # Show profiles with validation
     profiles = list_profiles()
@@ -491,6 +590,9 @@ def main():
                         help="Source files to download per dataset (default: 3)")
     parser.add_argument("--tag", type=str, default=None,
                         help="Run tag (default: today's date)")
+    parser.add_argument("--model", type=str, default=None,
+                        help="Claude model override (e.g. 'claude-opus-4-6'). "
+                             "Non-default models get isolated results directories.")
     parser.add_argument("--prepare-only", action="store_true",
                         help="Only prepare datasets, don't run experiments")
     parser.add_argument("--save-profile", type=str, metavar="NAME",
@@ -551,14 +653,26 @@ def main():
         print_status()
         return
 
+    # --- PID lock (prevent duplicate experiment runs) ---
+    from tui.resilience import acquire_pidlock, release_pidlock
+    if not acquire_pidlock():
+        sys.exit(1)
+    import atexit
+    atexit.register(release_pidlock)
+
     # --- Determine run tag ---
     tag = args.tag or datetime.now().strftime("%b%d").lower()
 
     # --- Determine which datasets to run ---
     datasets = [args.dataset] if args.dataset else DATASET_ORDER
 
+    model = args.model
+    slug = _model_slug(model)
+
     print(f"\nMulti-Dataset Experiment Suite")
     print(f"  Tag: {tag}")
+    if slug:
+        print(f"  Model: {model} (results → results/{slug}/<dataset>/)")
     print(f"  Datasets: {', '.join(datasets)}")
     print(f"  Max experiments per dataset: {args.max_experiments}")
     print(f"  Shards per dataset: {args.num_shards}")
@@ -571,8 +685,8 @@ def main():
         print(f"{'#'*60}")
 
         # Skip if completed (resume-aware: only skip when target reached)
-        if args.skip_completed and has_results(dataset_name):
-            n = count_experiments(dataset_name)
+        if args.skip_completed and has_results(dataset_name, model):
+            n = count_experiments(dataset_name, model)
             if n >= args.max_experiments:
                 print(f"  Skipping — already has {n}/{args.max_experiments} experiments")
                 continue
@@ -604,7 +718,7 @@ def main():
             continue
 
         # Run agent (headless — no TUI, survives terminal disconnect)
-        run_agent(dataset_name, tag, args.max_experiments)
+        run_agent(dataset_name, tag, args.max_experiments, model=model)
 
     # --- Final status ---
     print_status()

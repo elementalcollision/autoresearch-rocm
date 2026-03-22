@@ -177,13 +177,22 @@ def main():
     parser.add_argument("--training-script", default="train_rocm.py", help="Training script path")
     parser.add_argument("--results", default="results.tsv", help="Results TSV path")
     parser.add_argument("--dataset", type=str, default="", help="Dataset name (for heartbeat/logging)")
+    parser.add_argument("--model", type=str, default=None, help="Claude model override (e.g. 'claude-opus-4-6')")
     args = parser.parse_args()
+
+    # PID lock — prevent duplicate experiment runs
+    from tui.resilience import acquire_pidlock, release_pidlock
+    if not acquire_pidlock():
+        sys.exit(1)
+    import atexit
+    atexit.register(release_pidlock)
 
     success = run_headless(
         training_script=args.training_script,
         results_path=args.results,
         tag=args.tag,
         max_experiments=args.max,
+        model=args.model,
         dataset_name=args.dataset,
     )
     sys.exit(0 if success else 1)

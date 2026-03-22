@@ -80,7 +80,8 @@ def main():
     mode = "single"
     max_experiments = 100
     run_tag = None
-    training_script = "train_rocm.py"
+    backend = os.environ.get("AUTORESEARCH_BACKEND", "rocm")
+    training_script = "train_rocm7.py" if backend == "rocm7" else "train_rocm.py"
 
     if "--watch" in args:
         mode = "watch"
@@ -105,6 +106,14 @@ def main():
     # Remaining positional arg is the training script
     if args:
         training_script = args[0]
+
+    # PID lock for agent mode — prevent duplicate experiment runs
+    if mode == "agent":
+        from tui.resilience import acquire_pidlock, release_pidlock
+        if not acquire_pidlock():
+            sys.exit(1)
+        import atexit
+        atexit.register(release_pidlock)
 
     from tui.app import DashboardApp
 

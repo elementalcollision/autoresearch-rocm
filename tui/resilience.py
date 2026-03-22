@@ -234,3 +234,69 @@ def install_signal_handlers(stop_callback: Callable[[], None]) -> None:
     # SIGHUP = terminal disconnected (SSH timeout, etc.)
     if hasattr(signal, "SIGHUP"):
         signal.signal(signal.SIGHUP, _handler)
+
+
+# ---------------------------------------------------------------------------
+# PID file locking — prevent duplicate experiment runs
+# ---------------------------------------------------------------------------
+
+_DEFAULT_PIDFILE = Path(__file__).parent.parent / ".suite.pid"
+
+
+def acquire_pidlock(pidfile: Path = _DEFAULT_PIDFILE) -> bool:
+    """Write our PID to the lock file. Returns False if another runner is active.
+
+    Prevents multiple concurrent experiment runners from fighting over one GPU.
+    Stale locks from crashed processes are detected and cleaned up automatically.
+    """
+    if pidfile.exists():
+        try:
+            old_pid = int(pidfile.read_text().strip())
+            try:
+                os.kill(old_pid, 0)  # signal 0 = existence check
+                # Process exists — verify it's actually an experiment runner
+                import platform
+                if platform.system() == "Linux":
+                    cmdline_path = f"/proc/{old_pid}/cmdline"
+                    if os.path.exists(cmdline_path):
+                        with open(cmdline_path) as f:
+                            cmdline = f.read()
+                        if "run_suite" in cmdline or "headless" in cmdline or "dashboard" in cmdline:
+                            print(f"\n  \u274c ERROR: Another experiment runner is already active (PID {old_pid})")
+                            print(f"     Kill it first:  kill {old_pid}")
+                            print(f"     Or force:       rm {pidfile} && re-run\n")
+                            return False
+                        # PID exists but isn't an experiment runner — stale lock
+                    else:
+                        # No /proc entry — stale lock
+                        pass
+                else:
+                    # macOS / other: PID is alive, assume it's a runner
+                    print(f"\n  \u274c ERROR: Another experiment runner may be active (PID {old_pid})")
+                    print(f"     Kill it first:  kill {old_pid}")
+                    print(f"     Or force:       rm {pidfile} && re-run\n")
+                    return False
+            except ProcessLookupError:
+                pass  # PID doesn't exist — stale lock
+            except PermissionError:
+                # Process exists but we can't signal it — assume alive
+                print(f"\n  \u274c ERROR: Another experiment runner may be active (PID {old_pid})")
+                print(f"     Kill it first:  kill {old_pid}")
+                print(f"     Or force:       rm {pidfile} && re-run\n")
+                return False
+        except (ValueError, OSError):
+            pass  # Corrupt PID file — remove it
+
+    pidfile.write_text(str(os.getpid()))
+    return True
+
+
+def release_pidlock(pidfile: Path = _DEFAULT_PIDFILE):
+    """Remove the PID lock file if it still contains our PID."""
+    try:
+        if pidfile.exists():
+            stored = int(pidfile.read_text().strip())
+            if stored == os.getpid():
+                pidfile.unlink()
+    except (ValueError, OSError):
+        pass
