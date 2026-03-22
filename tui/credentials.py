@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 
-KEYCHAIN_SERVICE = "autoresearch-agent"
+KEYCHAIN_SERVICE = "autoresearch-rocm-agent"
 CLAUDE_CODE_SERVICE = "Claude Code-credentials"
 
 
