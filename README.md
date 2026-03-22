@@ -9,7 +9,7 @@ Ported from [autoresearch-cuda](https://github.com/elementalcollision/autoresear
 | Dataset | Baseline val_bpb | Best val_bpb | Improvement | tok/s | MFU | Experiments |
 |---------|-------------------|--------------|-------------|-------|-----|-------------|
 | **climbmix** | 1.066970 | **1.035937** | -2.91% | 397,867 | 13.1% | 100 |
-| fineweb-edu | 1.052639 | **1.028451** | -2.30% | 441,121 | 14.5% | 28 (in progress) |
+| **fineweb-edu** | 1.035989 | **1.014783** | -2.05% | 549,816 | 18.3% | 100 |
 
 **Key finding:** The MI300x's throughput (~400K tok/s) enables 911 training steps in a 5-minute window vs ~200 on an RTX 4000 Ada, producing lower absolute val_bpb despite the CUDA fork showing a larger relative improvement.
 
