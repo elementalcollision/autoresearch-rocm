@@ -124,21 +124,6 @@ uv run run_suite.py --dataset climbmix --model claude-sonnet-4-6 --max-experimen
 
 Each deployment writes a `manifest.json` with GPU fingerprint, ROCm version, and provenance metadata. Every experiment row includes a `gpu_name` field. Results TSVs are git-ignored to prevent cross-GPU data contamination when code is cloned to a different instance.
 
-## RunPod Deployment
-
-Deployment scripts live in the companion [DigitalOceanGPU](https://github.com/elementalcollision/DigitalOceanGPU) repo:
-
-```bash
-./runpod_setup.sh <pod-id>                              # Bootstrap environment
-./runpod_experiment.sh <pod-id> climbmix 100 runpod-mar21  # Launch experiments
-./runpod_monitor.sh <pod-id>                             # Monitor progress
-./runpod_rsync.sh <pod-id>                               # Pull results
-
-# ROCm 7.x pod
-ROCM_VERSION=7 ./runpod_setup.sh <pod-id>
-AUTORESEARCH_BACKEND=rocm7 ./runpod_experiment.sh <pod-id> climbmix 100 rocm7-climbmix
-```
-
 ## Architecture
 
 ```
