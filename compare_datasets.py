@@ -45,6 +45,7 @@ DATASET_COLORS = {
     "cosmopedia-v2": "#3498db",
     "slimpajama": "#9b59b6",
     "openwebtext": "#f39c12",
+    "pubmed-abstract": "#1abc9c",
 }
 
 # Hyperparameters we track across datasets
@@ -92,12 +93,12 @@ class DatasetRun:
 
     @property
     def best(self):
-        keeps = [e for e in self.experiments if e.status in ("keep", "baseline") and e.val_bpb > 0]
-        return min(keeps, key=lambda e: e.val_bpb) if keeps else None
+        valid = [e for e in self.experiments if e.val_bpb > 0.5]
+        return min(valid, key=lambda e: e.val_bpb) if valid else None
 
     @property
     def kept(self):
-        return [e for e in self.experiments if e.status == "keep"]
+        return [e for e in self.experiments if e.status in ("keep", "kept")]
 
     @property
     def discarded(self):
@@ -144,9 +145,11 @@ class DatasetRun:
 
     @property
     def optimal_config(self):
-        """Extract the optimal hyperparameter values from the keep chain."""
+        """Extract the optimal hyperparameter values from the best experiment."""
         changes = {}
-        for e in self.kept:
+        # Use best experiment + any kept chain; if no kept, just best
+        chain = self.kept if self.kept else ([self.best] if self.best else [])
+        for e in chain:
             desc = e.description
             desc_lower = desc.lower()
             for param in TRACKED_PARAMS + ["depth", "window_pattern",
@@ -616,7 +619,102 @@ def generate_chart(runs, output_path):
 # Wiki upload
 # ---------------------------------------------------------------------------
 
-def push_to_wiki(image_path):
+def generate_wiki_analysis(runs):
+    """Generate the full Cross-Dataset-Comparison wiki page markdown."""
+    img_url = "https://raw.githubusercontent.com/wiki/elementalcollision/autoresearch-rocm/images/cross-dataset-comparison.png"
+    lines = []
+    lines.append("# Cross-Dataset Comparison")
+    lines.append("")
+    lines.append(f"[![Cross-Dataset Comparison]({img_url})]({img_url})")
+    lines.append("")
+    lines.append("_Click the chart to view full size._")
+    lines.append("")
+    lines.append("## Summary")
+    lines.append("")
+    lines.append("| Dataset | Experiments | Baseline | Best | Improvement | Peak tok/s |")
+    lines.append("|---------|------------|----------|------|-------------|------------|")
+
+    for name, run in runs.items():
+        bl = run.baseline
+        best = run.best
+        imp = run.improvement_pct
+        valid = [e for e in run.experiments if e.val_bpb > 0.5 and e.tok_sec > 0]
+        peak_tok = max(e.tok_sec for e in valid) if valid else 0
+        lines.append(
+            f"| {name} | {len(run.experiments)} | {bl.val_bpb:.6f} | "
+            f"{best.val_bpb:.6f} | {imp:+.2f}% | {peak_tok:,.0f} |"
+        )
+
+    lines.append("")
+    lines.append("## Per-Dataset Analysis")
+    lines.append("")
+
+    for name, run in runs.items():
+        bl = run.baseline
+        best = run.best
+        imp = run.improvement_pct
+        valid = sorted(
+            [e for e in run.experiments if e.val_bpb > 0.5],
+            key=lambda e: e.val_bpb,
+        )
+        crashed = [e for e in run.experiments if e.val_bpb <= 0.5 or e.status == "crash"]
+        tok_vals = [e.tok_sec for e in valid if e.tok_sec > 0]
+
+        lines.append(f"### {name}")
+        lines.append("")
+        lines.append(f"- **Experiments:** {len(run.experiments)} total, {len(crashed)} crashed")
+        lines.append(f"- **Baseline:** {bl.val_bpb:.6f} val_bpb ({bl.name})")
+        lines.append(f"- **Best:** {best.val_bpb:.6f} val_bpb ({best.name}) — {best.description}")
+        lines.append(f"- **Improvement:** {imp:+.3f}% over baseline")
+        if tok_vals:
+            lines.append(f"- **Throughput:** {min(tok_vals):,.0f} – {max(tok_vals):,.0f} tok/s "
+                         f"(avg {sum(tok_vals)/len(tok_vals):,.0f})")
+        lines.append("")
+
+        # Top 5 table
+        lines.append("| Rank | Experiment | val_bpb | tok/s | Description |")
+        lines.append("|------|-----------|---------|-------|-------------|")
+        for i, e in enumerate(valid[:5], 1):
+            lines.append(f"| {i} | {e.name} | {e.val_bpb:.6f} | {e.tok_sec:,.0f} | {e.description[:60]} |")
+        lines.append("")
+
+    # Cross-dataset insights
+    lines.append("## Key Insights")
+    lines.append("")
+
+    if len(runs) >= 2:
+        best_improv = max(runs.items(), key=lambda x: x[1].improvement_pct)
+        best_abs = min(runs.items(), key=lambda x: x[1].best.val_bpb)
+        lines.append(f"- **Biggest improvement:** {best_improv[0]} ({best_improv[1].improvement_pct:+.2f}%)")
+        lines.append(f"- **Best absolute val_bpb:** {best_abs[0]} ({best_abs[1].best.val_bpb:.6f})")
+
+        # Check if any datasets converged on similar values
+        best_bpbs = {name: run.best.val_bpb for name, run in runs.items()}
+        vals = list(best_bpbs.values())
+        if max(vals) - min(vals) < 0.005:
+            lines.append("- **Convergence:** All datasets converged to similar optimal val_bpb "
+                         f"(range: {min(vals):.6f} – {max(vals):.6f})")
+
+        # Dataset-specific notes
+        for name, run in runs.items():
+            if run.improvement_pct < 0.01:
+                lines.append(f"- **{name}:** Baseline hyperparameters are already optimal — "
+                             "no experiment improved over default configuration")
+
+    lines.append("")
+    lines.append("## Hardware")
+    lines.append("")
+    lines.append("All experiments ran on **AMD Instinct MI300X** (192 GB HBM3) via RunPod.")
+    lines.append("Training uses ROCm 6.x with CK Flash Attention and bf16 autocast.")
+    lines.append("")
+    lines.append("---")
+    lines.append("_Generated by `compare_datasets.py --wiki`_")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def push_to_wiki(image_path, runs=None):
     """Clone wiki repo, add image, commit and push."""
     wiki_url = "https://github.com/elementalcollision/autoresearch-rocm.wiki.git"
     tmp_dir = tempfile.mkdtemp(prefix="rocm-wiki-")
@@ -636,26 +734,25 @@ def push_to_wiki(image_path):
         subprocess.run(["git", "add", "images/cross-dataset-comparison.png"],
                         cwd=tmp_dir, check=True, capture_output=True, text=True)
 
-        # Check if the wiki page needs the image reference
+        # Write full wiki page with analysis if runs provided
         wiki_page = Path(tmp_dir) / "Cross-Dataset-Comparison.md"
-        if wiki_page.exists():
+        if runs:
+            content = generate_wiki_analysis(runs)
+            wiki_page.write_text(content)
+            subprocess.run(["git", "add", "Cross-Dataset-Comparison.md"],
+                            cwd=tmp_dir, check=True, capture_output=True, text=True)
+            print("  Generated full wiki analysis page")
+        elif wiki_page.exists():
+            # Fallback: just ensure clickable image ref
             content = wiki_page.read_text()
-            img_ref = "![Cross-Dataset Comparison](https://raw.githubusercontent.com/wiki/elementalcollision/autoresearch-rocm/images/cross-dataset-comparison.png)"
-            if img_ref not in content:
-                # Insert image after the first heading
-                lines = content.split("\n")
-                insert_idx = 0
-                for i, line in enumerate(lines):
-                    if line.startswith("# "):
-                        insert_idx = i + 1
-                        break
-                lines.insert(insert_idx, "")
-                lines.insert(insert_idx + 1, img_ref)
-                lines.insert(insert_idx + 2, "")
-                wiki_page.write_text("\n".join(lines))
+            img_url = "https://raw.githubusercontent.com/wiki/elementalcollision/autoresearch-rocm/images/cross-dataset-comparison.png"
+            clickable_img = f"[![Cross-Dataset Comparison]({img_url})]({img_url})"
+            old_img_ref = f"![Cross-Dataset Comparison]({img_url})"
+            if clickable_img not in content:
+                content = content.replace(old_img_ref, clickable_img) if old_img_ref in content else content
+                wiki_page.write_text(content)
                 subprocess.run(["git", "add", "Cross-Dataset-Comparison.md"],
                                 cwd=tmp_dir, check=True, capture_output=True, text=True)
-                print("  Updated wiki page with image reference")
 
         result = subprocess.run(["git", "diff", "--cached", "--quiet"],
                                 cwd=tmp_dir, capture_output=True)
@@ -702,7 +799,7 @@ def main():
         generate_chart(runs, args.output)
 
         if args.wiki:
-            push_to_wiki(args.output)
+            push_to_wiki(args.output, runs=runs)
 
 
 if __name__ == "__main__":
